@@ -1,0 +1,109 @@
+IPAudio 1.6 start (panel opens only on a long press of the open key)
+2026-10-14 16:03:36 closed: key 59 (as 398) open_key=398
+2026-10-14 16:03:37 HUD app_process started
+2026-10-14 16:03:37 loaded 33 streams in 2 servers
+2026-10-14 16:03:37 helper app_process started
+2026-10-14 16:03:37 menu open
+2026-10-14 16:03:38 loaded 64 streams in 3 servers
+2026-10-14 16:03:38 helper ready after 1 s
+IpaHud watching /data/plugin/IPAudio_data/overlay.txt
+2026-10-14 16:03:43 key 108
+2026-10-14 16:03:44 key 106
+2026-10-14 16:03:46 key 105
+2026-10-14 16:03:49 key 106
+2026-10-14 16:03:50 key 108
+2026-10-14 16:03:51 key 28
+2026-10-14 16:03:51 playing 'FoX FM Live 1' id 10 relay=0 vdelay 0 adelay 0
+2026-10-14 16:03:51 audio status - -> DIRECT (playing directly (no relay))
+2026-10-14 16:03:59 key 103
+2026-10-14 16:04:01 key 105
+2026-10-14 16:04:14 key 103
+2026-10-14 16:04:17 key 106
+2026-10-14 16:04:17 key 106
+2026-10-14 16:04:17 key 106
+2026-10-14 16:04:17 key 106
+2026-10-14 16:04:18 key 106
+2026-10-14 16:04:32 key 108
+2026-10-14 16:04:42 key 106
+2026-10-14 16:04:44 key 106
+2026-10-14 16:04:48 key 108
+2026-10-14 16:04:50 key 28
+2026-10-14 16:04:50 playing '🇶🇦Bein1 باريس🆚السيتي TRING1 16E' id 1 relay=0 vdelay 0 adelay 0
+2026-10-14 16:04:50 audio status - -> DIRECT (playing directly (no relay))
+2026-10-14 16:04:55 key 108
+2026-10-14 16:04:57 key 28
+2026-10-14 16:04:57 playing '🇶🇦Bein2 لاسك🆚ليفربول TRING2 16E' id 2 relay=0 vdelay 0 adelay 0
+2026-10-14 16:04:57 audio status - -> DIRECT (playing directly (no relay))
+2026-10-14 16:05:04 key 158
+2026-10-14 16:05:05 menu close
+Hi3798MV200:/tmp # busybox tail -200 /data/plugin/IPAudio_data/ipactl.log
+IpaCtl uid=1000 gid=3003
+IpaCtl relay listening on port 17901 (lan address 192.168.1.11)
+IpaCtl listening on 127.0.0.1:17900
+IpaCtl uid=1000 gid=3003
+IpaCtl relay listening on port 17901 (lan address 192.168.1.11)
+IpaCtl listening on 127.0.0.1:17900
+Relay: upstream connected, type=video/MP2T, url=http://foxfm.xyz:8080/live1
+Relay: stream starts with: ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
+IpaCtl: the player never connected to 127.0.0.1, trying 192.168.1.11
+IpaCtl: player restarted (player never connected, trying LAN address) err=0
+Relay: upstream connected, type=video/MP2T, url=http://foxfm.xyz:8080/live1
+Relay: stream starts with: ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
+IpaCtl: the player never connected to 127.0.0.1, trying 192.168.1.11
+IpaCtl: player restarted (player never connected, trying LAN address) err=0
+IpaCtl: player never connected to the relay, playing directly err=0
+Relay: upstream error: HTTP 403 (retry 1)
+IpaCtl: the player never connected to 127.0.0.1, trying 192.168.1.11
+IpaCtl: player restarted (player never connected, trying LAN address) err=0
+Relay: upstream error: timeout (retry 2)
+Relay: upstream error: HTTP 403 (retry 3)
+IpaCtl: player never connected to the relay, playing directly err=0
+Relay: upstream connected, type=video/MP2T, url=http://foxfm.xyz:8080/live1
+Relay: stream starts with: ee 5c 0b 74 22 60 fc e7 e4 97 9d 66 fc 55 f3 bd
+IpaCtl: the player never connected to 127.0.0.1, trying 192.168.1.11
+IpaCtl: player restarted (player never connected, trying LAN address) err=0
+IpaCtl: player never connected to the relay, playing directly err=0
+Relay: upstream connected, type=video/MP2T, url=http://foxfm.xyz:8080/live1
+Relay: stream starts with: 56 ae cb 0c 51 7c 40 64 fe 5f af e5 fe f0 78 74
+IpaCtl: the player never connected to 127.0.0.1, trying 192.168.1.11
+IpaCtl: player restarted (player never connected, trying LAN address) err=0
+IpaCtl: player never connected to the relay, playing directly err=0
+IpaCtl uid=1000 gid=3003
+IpaCtl relay listening on port 17901 (lan address 192.168.1.11)
+IpaCtl listening on 127.0.0.1:17900
+IpaCtl uid=1000 gid=3003
+IpaCtl relay listening on port 17901 (lan address 192.168.1.11)
+IpaCtl listening on 127.0.0.1:17900
+IpaCtl uid=1000 gid=3003
+IpaCtl relay listening on port 17901 (lan address 192.168.1.11)
+IpaCtl listening on 127.0.0.1:17900
+Relay: upstream connected, type=video/MP2T, url=http://foxfm.xyz:8080/live1
+Relay: stream starts with: 4d 10 00 00 00 a9 56 dc 02 0f 06 11 52 6f 8e 51
+IpaCtl: the player never connected to 127.0.0.1, trying 192.168.1.11
+IpaCtl: player restarted (player never connected, trying LAN address) err=0
+IpaCtl: player never connected to the relay, playing directly err=0
+Relay: upstream error: HTTP 403 (retry 1)
+Relay: upstream error: HTTP 403 (retry 2)
+Relay: upstream error: HTTP 403 (retry 3)
+IpaCtl: the player never connected to 127.0.0.1, trying 192.168.1.11
+IpaCtl: player restarted (player never connected, trying LAN address) err=0
+IpaCtl: player never connected to the relay, playing directly err=0
+Relay: upstream connected, type=video/MP2T, url=http://foxfm.xyz:8080/live1
+Relay: stream starts with: 36 f0 18 b1 96 29 8f 41 a1 3f f7 d5 a9 1c 3c 42
+IpaCtl: the player never connected to 127.0.0.1, trying 192.168.1.11
+IpaCtl: player restarted (player never connected, trying LAN address) err=0
+IpaCtl: player never connected to the relay, playing directly err=0
+IpaCtl uid=1000 gid=3003
+IpaCtl relay listening on port 17901 (lan address 192.168.1.11)
+IpaCtl listening on 127.0.0.1:17900
+Relay: upstream connected, type=video/MP2T, url=http://foxfm.xyz:8080/live1
+Relay: stream starts with: ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
+IpaCtl: the player never connected to 127.0.0.1, trying 192.168.1.11
+IpaCtl: player restarted (player never connected, trying LAN address) err=0
+IpaCtl: player never connected to the relay, playing directly err=0
+IpaCtl uid=1000 gid=3003
+IpaCtl relay listening on port 17901 (lan address 192.168.1.11)
+IpaCtl listening on 127.0.0.1:17900
+IpaCtl uid=1000 gid=3003
+IpaCtl relay listening on port 17901 (lan address 192.168.1.11)
+IpaCtl listening on 127.0.0.1:17900
