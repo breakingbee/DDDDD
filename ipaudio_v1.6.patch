@@ -1,0 +1,130 @@
+--- /home/ubuntu/work/ipaudio_DDDDD.c	2026-10-14 15:46:44.616460433 +0000
++++ /home/ubuntu/work/ipaudio_fixed.c	2026-10-14 15:47:13.260842463 +0000
+@@ -63,7 +63,7 @@
+ #define HUD_JAR      DATA_DIR "/IpaHud.jar"
+ #define CTL_JAR      DATA_DIR "/IpaCtl.jar"
+ #define HUD_CLASS    "lab.ipa.IpaHud"
+-#define VERSION      "1.2"
++#define VERSION      "1.6"
+ #define CTL_CLASS    "lab.ipa.IpaCtl"
+ #ifndef AUTORUN
+ #define AUTORUN      "/data/plugin/autorun.sh"
+@@ -633,9 +633,19 @@
+     Ent *e = (g_play >= 0 && g_play < g_nent && g_active_id != 0) ? &g_ent[g_play] : NULL;
+     if (!e) { snprintf(out, n, "original audio"); return "#90A4AE"; }
+     plain_text(t, sizeof t, e->title);
+-    if (!g_play_relayed) { snprintf(out, n, "Playing %s \xC2\xB7 direct (no aDelay / status)", t); return "#69F0AE"; }
+-    if (!g_stat.valid) { snprintf(out, n, "Playing %s", t); return "#69F0AE"; }
++    if (!g_stat.valid) {
++        if (!g_play_relayed) snprintf(out, n, "Playing %s \xC2\xB7 direct", t);
++        else snprintf(out, n, "Playing %s", t);
++        return "#69F0AE";
++    }
+     if (g_stat.kbps > 0) snprintf(kb, sizeof kb, " \xC2\xB7 %d kbps", g_stat.kbps);
++    /* A WAITING state with a positive bitrate means the upstream is delivering
++     * data; do not present it as a broken stream merely because the TV player
++     * has not attached to the relay yet. */
++    if (g_stat.kbps > 0 && strcmp(g_stat.state, "WAITING") == 0) {
++        snprintf(out, n, "Playing %s%s \xC2\xB7 relay player pending", t, kb);
++        return "#69F0AE";
++    }
+     if (strcmp(g_stat.state, "PLAYING") == 0) {
+         if (g_half > 0) { fmt_delay(dl, sizeof dl, g_half); snprintf(extra + strlen(extra), sizeof extra - strlen(extra), " \xC2\xB7 vDelay %s", dl); }
+         if (g_ahalf > 0) { fmt_delay(dl, sizeof dl, g_ahalf); snprintf(extra + strlen(extra), sizeof extra - strlen(extra), " \xC2\xB7 aDelay %s", dl); }
+@@ -655,8 +665,12 @@
+ /* badge on the playing row, like the "100% - 258k" meter in the Enigma list */
+ static const char *row_badge(char *out, size_t n) {
+     out[0] = 0;
+-    if (!g_play_relayed || !g_stat.valid) return "#69F0AE";
+-    if (strcmp(g_stat.state, "PLAYING") == 0) { snprintf(out, n, "100%% - %dk", g_stat.kbps); return "#69F0AE"; }
++    if (!g_stat.valid) return "#69F0AE";
++    if (strcmp(g_stat.state, "PLAYING") == 0 ||
++        ((strcmp(g_stat.state, "WAITING") == 0 || strcmp(g_stat.state, "DIRECT") == 0 || strcmp(g_stat.state, "HLS") == 0) && g_stat.kbps > 0)) {
++        snprintf(out, n, "%dk", g_stat.kbps);
++        return "#69F0AE";
++    }
+     if (strcmp(g_stat.state, "BUFFERING") == 0) { snprintf(out, n, "%d%%", g_stat.pct); return "#FFAB40"; }
+     if (strcmp(g_stat.state, "STALLED") == 0 || strcmp(g_stat.state, "ERROR") == 0) { snprintf(out, n, "%s", g_stat.state); return "#FF5252"; }
+     snprintf(out, n, "%s", g_stat.state);
+@@ -678,7 +692,21 @@
+     APPEND("BAR|%s|%s\n", col, tbuf);
+     APPEND("PANEL|iP AUDIO+|v" VERSION "\n");
+ 
+-    /* ---- Delay FIRST (top of panel) — video delay only ---- */
++    /* ---- Live FIRST so it remains visible even with a large stream list ---- */
++    if (g_live_info && g_active_id != 0) {
++        APPEND("SEC|Live\n");
++        if (g_stat.valid) {
++            const char *state = g_stat.state[0] ? g_stat.state : "?";
++            APPEND("INFO|#B0BEC5|%s \xC2\xB7 %d kbps \xC2\xB7 disconnects %d \xC2\xB7 corrections %d\n",
++                   state, g_stat.kbps, g_stat.reconn, g_stat.recovers);
++            APPEND("INFO|#78909C|anti-drift %s (%d)  auto-recover %s (%d)\n",
++                   g_anti ? "ON" : "OFF", g_stat.skips, g_auto ? "ON" : "OFF", g_stat.recovers);
++        } else {
++            APPEND("INFO|#90A4AE|waiting for live status\n");
++        }
++    }
++
++    /* ---- Delay after Live — video delay only ---- */
+     APPEND("SEC|Delay\n");
+     fmt_delay(dl, sizeof dl, g_half);
+     if (g_sel == vrow) APPEND("KV|S|vDelay|" LARR " %s " RARR "\n", dl);
+@@ -713,7 +741,7 @@
+             if (playing) {
+                 col = row_badge(badge, sizeof badge);
+                 if (g_live_info && g_stat.valid) {
+-                    if (g_play_relayed && strcmp(g_stat.state, "PLAYING") == 0)
++                    if (g_stat.kbps > 0)
+                         snprintf(sub, sizeof sub, "%d kbps \xC2\xB7 %s \xC2\xB7 reconn %d",
+                                  g_stat.kbps,
+                                  (g_stat.reconn > 0 && g_stat.recovers + g_stat.reconn > 2) ? "unstable" : "stable",
+@@ -721,7 +749,7 @@
+                     else
+                         snprintf(sub, sizeof sub, "%s \xC2\xB7 %s",
+                                  g_stat.state[0] ? g_stat.state : "live",
+-                                 g_stat.kbps > 0 ? "see live info" : pt);
++                                 g_stat.state[0] ? "see Live" : pt);
+                 }
+             }
+             APPEND("ITEM|%s|%d|%s|%s|%s|%s\n", flags, i + 1, nm, sub, badge, col);
+@@ -729,19 +757,6 @@
+         if (top + VISIBLE < g_nview) APPEND("INFO|#546E7A|%d more below\n", g_nview - top - VISIBLE);
+     }
+ 
+-    /* live info block when playing */
+-    if (g_live_info && g_active_id != 0) {
+-        APPEND("SEC|Live\n");
+-        if (g_stat.valid) {
+-            APPEND("INFO|#B0BEC5|state %s \xC2\xB7 %d kbps \xC2\xB7 recovers %d \xC2\xB7 reconnects %d\n",
+-                   g_stat.state[0] ? g_stat.state : "?", g_stat.kbps, g_stat.recovers, g_stat.reconn);
+-            APPEND("INFO|#78909C|anti-drift %s (%d)  auto-recover %s (%d)\n",
+-                   g_anti ? "ON" : "OFF", g_stat.skips, g_auto ? "ON" : "OFF", g_stat.recovers);
+-        } else {
+-            APPEND("INFO|#90A4AE|live stats when relay reports status (direct play = limited)\n");
+-        }
+-    }
+-
+     APPEND("LEG|<font color='#FF5252'>&#9679;</font> Reset vDelay &nbsp; <font color='#69F0AE'>&#9679;</font> Reload &nbsp; "
+            "<font color='#FFD600'>&#9679;</font> Original audio &nbsp; <font color='#29B6F6'>&#9679;</font> Live info / Exit<br/>"
+            "OK play \xC2\xB7 LEFT/RIGHT vDelay\n");
+@@ -941,7 +956,9 @@
+     Stat s;
+     int nf = 0, changed;
+     time_t now = time(NULL);
+-    if (g_play < 0 || g_active_id == 0 || !g_play_relayed) return;
++    /* STATUS is useful in both relay and direct mode.  Older code skipped it
++     * for direct playback, which made kbps/counters disappear completely. */
++    if (g_play < 0 || g_active_id == 0) return;
+     if (now - g_stat_poll < (g_menu_open ? 1 : 3)) return;
+     g_stat_poll = now;
+     if (ctl_cmd("STATUS", buf, sizeof buf) != 0) { g_stat.valid = 0; return; }
+@@ -973,7 +990,8 @@
+         int bad_before = strcmp(prev, "ERROR") == 0 || strcmp(prev, "STALLED") == 0;
+         if (bad_now) { char t[160]; snprintf(t, sizeof t, "Audio problem: %s", s.msg[0] ? s.msg : "no data"); toast("#FF5252", t); }
+         else if (bad_before && strcmp(s.state, "PLAYING") == 0) toast("#69F0AE", "Audio recovered");
+-        else if (strcmp(s.state, "HLS") == 0 || strcmp(s.state, "DIRECT") == 0) toast("#FFAB40", "HLS stream: direct mode (no aDelay / status)");
++        else if ((strcmp(s.state, "HLS") == 0 || strcmp(s.state, "DIRECT") == 0) && s.kbps <= 0)
++            toast("#FFAB40", "Direct mode: live counters unavailable");
+     }
+ }
+ 
