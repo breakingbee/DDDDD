@@ -1,271 +1,259 @@
-echo "===== Panel startup script ====="
-===== Panel startup script =====
-ed -n '1,260p' /data/plugin/panel/start.sh 2>/dev/null                        <
-busybox grep -RInaE 'Relay|OrcaGold|icam|Abertis|Oscam|OSECM|EuroCam|Samur|/data/plugin' \
-  /data/plugin/panel /data/plugin/autorun.sh 2>/dev/null
-#!/system/bin/sh
-# ============================================================================
-# Démarre le daemon PANEL (busybox httpd) + AUTO-RÉPARATION de l'autorun.
-# autorun.sh est un fichier sensible : un plugin USB tiers ou un client root peut
-# l'écraser/l'éditer et faire disparaître la ligne qui lance le panel au boot.
-# Parades :
-#   1) à chaque démarrage on RÉINSÈRE la ligne panel dans autorun.sh si absente
-#      (backup + sans doublon, insérée AVANT OrcaGold qui bloque) ;
-#   2) un WATCHDOG détaché re-vérifie périodiquement (autorun + httpd vivant),
-#      de sorte qu'une édition d'autorun est soignée AVANT le prochain reboot.
-# Modes : (défaut) heal + httpd + watchdog ; « --tick » (watchdog) heal + httpd.
-# Idempotent. Compatible Android 7 / busybox ash.
-# ============================================================================
-# PATH complet : quand le daemon est lance par le LAUNCHER (Home.onCreate), il
-# herite d'un env minimal -> les CGI (getprop/dumpsys) sortent du JSON vide.
-# On force un PATH systeme, herite par httpd et donc par les CGI.
-export PATH=/system/bin:/system/xbin:/vendor/bin:/sbin:$PATH
-DIR=/data/plugin/panel
-AR=/data/plugin/autorun.sh
-PANEL_LINE='[ -x /data/plugin/panel/start.sh ] && /system/bin/sh /data/plugin/panel/start.sh'
-PORT=$(sed -n 's/^port=//p' "$DIR/panel.conf" 2>/dev/null); [ -z "$PORT" ] && PORT=8890
+echo "===== All HTTP processes ====="
+===== All HTTP processes =====
+s | busybox grep -Ei 'httpd|f_server|screen|web' | busybox grep -v grep       <
+busybox ps | busybox grep 'httpd -p 8890' | busybox grep -v grep
+echo "Count:"
+busybox ps | busybox grep 'httpd -p 8890' | busybox grep -v grep | busybox wc -l
 
-heal_autorun(){
-  if [ ! -f "$AR" ]; then
-    { printf '#!/system/bin/sh\n%s\n' "$PANEL_LINE"; } > "$AR"; chmod 755 "$AR"
-    return 0
-  fi
-  grep -q 'panel/start.sh' "$AR" 2>/dev/null && return 0   # ligne déjà présente
-  [ -f "$AR.bak_panelheal" ] || cp -f "$AR" "$AR.bak_panelheal" 2>/dev/null
-  TMP="$AR.tmp.$$"; : > "$TMP"; INS=0
-  while IFS= read -r l; do
-    case "$l" in
-      /data/plugin/OrcaGold*)   # ligne de commande OrcaGold (pas un commentaire)
-        [ "$INS" = 0 ] && { printf '%s\n' "$PANEL_LINE" >> "$TMP"; INS=1; } ;;
-    esac
-    printf '%s\n' "$l" >> "$TMP"
-  done < "$AR"
-  [ "$INS" = 0 ] && printf '%s\n' "$PANEL_LINE" >> "$TMP"   # pas d'OrcaGold -> à la fin
-  # remplacement atomique seulement si le TMP est cohérent (non vide)
-  [ -s "$TMP" ] && cp -f "$TMP" "$AR" && chmod 755 "$AR"
-  rm -f "$TMP"
-}
-
-am_root(){ [ "$(id -u 2>/dev/null)" = "0" ]; }
-
-# pid du process qui ecoute :$PORT (busybox httpd), ou vide.
-listener_pid(){
-  # pid lie a :$PORT, SANS netstat -p : 'netstat -ltnp' scanne /proc/*/fd de
-  # TOUS les process et declenche une fausse alerte "mem-injector" du
-  # module-security (qui tue alors le process -> churn / restart f_server).
-  # On resout le socket LISTEN via /proc/net/tcp{,6} (inode) puis le pid
-  # proprietaire via /proc/*/fd (readlink de socket:[inode] uniquement,
-  # jamais d'ouverture de /proc/*/mem -> invisible pour le module).
-  _hp=$(busybox awk -v p="$PORT" 'BEGIN{printf "%04X", p}')
-  _ino=$(busybox awk -v hp=":$_hp" '$4=="0A" && $2 ~ hp"$"{print $10; exit}' \
-            /proc/net/tcp /proc/net/tcp6 2>/dev/null)
-  [ -z "$_ino" ] && return
-  for _d in /proc/[0-9]*; do
-    for _fd in "$_d"/fd/*; do
-      [ "$(busybox readlink "$_fd" 2>/dev/null)" = "socket:[$_ino]" ] && {
-        echo "${_d#/proc/}"; return; }
-    done 2>/dev/null
-  done
-}
-# uid reel d'un pid via /proc (1er champ de la ligne Uid:), ou vide.
-proc_uid(){
-  busybox grep -m1 '^Uid:' "/proc/$1/status" 2>/dev/null \
-    | sed -n 's/^Uid:[^0-9]*\([0-9][0-9]*\).*/\1/p'
-}
-
-# ROOT-TAKEOVER — le daemon DOIT tourner en root (sinon /data/plugin/panel/tmp
-# 700-root non inscriptible -> download KO, et install.sh /system -> KO).
-# f_server execute autorun.sh en ROOT a chaque boot : cette passe root reprend
-# TOUJOURS la main, meme si le launcher (uid system) a binde :$PORT en premier.
-#  - lance en root  : si le listener actuel n'est PAS root, on le tue et on rebind ;
-#                     s'il est deja root, on ne touche a rien (pas de churn watchdog).
-#  - lance non-root : on ne deplace JAMAIS un listener existant (backup only).
-start_httpd(){
-  P=$(listener_pid)
-  if [ -n "$P" ]; then
-    if am_root; then
-      U=$(proc_uid "$P")
-      [ "$U" = "0" ] && return 0        # deja servi en root -> ne rien faire
-      kill "$P" 2>/dev/null; sleep 1     # httpd non-root (system) -> on l'evince
-      P2=$(listener_pid); [ -n "$P2" ] && { kill -9 "$P2" 2>/dev/null; sleep 1; }
-    else
-      return 0                           # non-root : jamais deplacer (root gagne)
-    fi
-  fi
-  chmod -R 755 "$DIR/www/cgi-bin" 2>/dev/null
-  busybox httpd -p "$PORT" -h "$DIR/www"
-}
-
-# --- provisioning /system : stash + script de restauration + hook init.bigfish ---
-# Rend l'anti-purge AUTO-SUFFISANT : meme une box montee via panel_guard (qui ne
-# pose que /data/plugin/panel) obtient au 1er boot le declencheur de restauration.
-# Idempotent : ne remonte /system rw que s'il y a reellement qqch a (re)poser.
-STASH=/system/reserved/panel_stash
-IBF=/system/etc/init.bigfish.sh
-# contenu EMBARQUE du script de restauration -> ecrit directement dans le stash,
-# INDEPENDANT du vecteur de livraison (marche meme si force_update met a jour
-# la box sans que le bundle garde n'ait depose le fichier dans /data/plugin/panel).
-write_restore_script(){
-  cat > "$1" <<'RB'
-#!/system/bin/sh
-export PATH=/system/bin:/system/xbin:/vendor/bin:/sbin:$PATH
-STASH=/system/reserved/panel_stash/panel.tgz
-if [ ! -d /data/plugin/panel/www/cgi-bin ]; then
-  [ -f "$STASH" ] || exit 0
-  busybox tar xzf "$STASH" -C /data/plugin/ 2>/dev/null
-fi
-[ -x /data/plugin/panel/start.sh ] && /system/bin/sh /data/plugin/panel/start.sh &
-RB
-}
-provision_system(){
-  am_root || return 0
-  CUR_VER=$(cat "$DIR/www/VERSION" 2>/dev/null)
-  STH_VER=$(busybox tar xzf "$STASH/panel.tgz" -O panel/www/VERSION 2>/dev/null)
-  NEED_STASH=0; [ -n "$CUR_VER" ] && [ "$CUR_VER" != "$STH_VER" ] && NEED_STASH=1
-  NEED_RB=0; [ ! -f "$STASH/panel_restore_boot.sh" ] && NEED_RB=1
-  NEED_HOOK=0; { [ -f "$IBF" ] && ! busybox grep -q panel_restore_boot "$IBF" 2>/dev/null; } && NEED_HOOK=1
-  [ "$NEED_STASH" = 0 ] && [ "$NEED_RB" = 0 ] && [ "$NEED_HOOK" = 0 ] && return 0
-  mount -o rw,remount /system 2>/dev/null || return 0
-  mkdir -p "$STASH" 2>/dev/null
-  if [ "$NEED_STASH" = 1 ]; then
-    busybox tar czf "$STASH/panel.tgz.tmp" -C /data/plugin panel 2>/dev/null \
-      && mv -f "$STASH/panel.tgz.tmp" "$STASH/panel.tgz"
-  fi
-  # script de restauration : ecrit depuis le contenu EMBARQUE, atomique
-  if write_restore_script "$STASH/.rb.tmp" 2>/dev/null; then
-    chmod 755 "$STASH/.rb.tmp" 2>/dev/null && mv -f "$STASH/.rb.tmp" "$STASH/panel_restore_boot.sh"
-  fi
-  # hook boot (idempotent) : init.bigfish.sh appelle le script de restauration
-  if [ "$NEED_HOOK" = 1 ]; then
-    [ -f "$IBF.bak_panel" ] || cp -f "$IBF" "$IBF.bak_panel" 2>/dev/null
-    printf '\n# --- Panel stash auto-restore (survie Delete All Plugins) ---\n[ -x %s/panel_restore_boot.sh ] && /system/bin/sh %s/panel_restore_boot.sh &\n' "$STASH" "$STASH" >> "$IBF"
-  fi
-  mount -o ro,remount /system 2>/dev/null
-}
-
-# --- re-active swpanel (app systeme) si desactivee depuis les Parametres Android ---
-# pm EXIGE ANDROID_DATA/ANDROID_ROOT (sinon "Aborted"). Attend que le framework
-# soit pret (borne 300s) ; sur un tick la 1ere verif passe direct. Detache.
-SWPKG=cc.mktech.swpanel
-heal_swpanel(){
-  am_root || return 0
-  ( export ANDROID_DATA=/data ANDROID_ROOT=/system
-    export PATH=/system/bin:/system/xbin:/vendor/bin:/sbin:$PATH
-    i=0; while [ $i -lt 60 ]; do pm path android >/dev/null 2>&1 && break; sleep 5; i=$((i+1)); done
-    pm path android >/dev/null 2>&1 || exit 0
-    pm list packages "$SWPKG" 2>/dev/null | busybox grep -q "$SWPKG" || exit 0
-    if pm list packages -d "$SWPKG" 2>/dev/null | busybox grep -q "$SWPKG"; then
-      pm enable "$SWPKG" >/dev/null 2>&1
-    fi
-  ) >/dev/null 2>&1 &
-}
-
-# --- watchdog (mode par défaut uniquement) ---
-if [ "$1" = "--tick" ]; then
-  heal_autorun; start_httpd; provision_system; heal_swpanel; exit 0
-fi
-
-heal_autorun
-start_httpd
-echo "PANEL httpd sur $PORT"
-
-# --- stash + provisioning /system + ré-activation swpanel ---
-provision_system
-heal_swpanel
-
-# --- auto-update silencieux (une seule fois au boot, pas sur les ticks) ---
-FU=$DIR/force_update.sh
-FULOCK=/tmp/.force_update_running
-if am_root && [ -x "$FU" ] && [ ! -f "$FULOCK" ]; then
-  : > "$FULOCK"
-  ( sleep 30; /system/bin/sh "$FU"; provision_system
-    # replay : reinstalle les plugins manquants apres un restore/reset usine
-    [ -f "$DIR/.restore_replay" ] && [ -x "$DIR/replay.sh" ] && \
-      /system/bin/sh "$DIR/replay.sh"
-    rm -f "$FULOCK" ) >/dev/null 2>&1 &
-fi
-
-# lance le watchdog s'il n'est pas déjà actif (verrou pid)
-WD=$DIR/.watchdog.pid
-if [ -f "$WD" ] && kill -0 "$(cat "$WD" 2>/dev/null)" 2>/dev/null; then
-  : # watchdog déjà en cours
-else
-  if command -v setsid >/dev/null 2>&1; then
-    setsid /system/bin/sh -c 'while :; do sleep 300; /system/bin/sh /data/plugin/panel/start.sh --tick; done' >/dev/null 2>&1 &
-  else
-    ( while :; do sleep 300; /system/bin/sh /data/plugin/panel/start.sh --tick; done ) >/dev/null 2>&1 &
-  fi
-  echo $! > "$WD"
-fi
-
-[ -x /data/plugin/ColorPro ] && /data/plugin/ColorPro >/dev/null 2>&1 &
-
-[ -x /data/plugin/ColorPro ] && /data/plugin/ColorPro >/dev/null 2>&1 &
-
-[ -x /data/plugin/ColorPro ] && /data/plugin/ColorPro >/dev/null 2>&1 &
-
-[ -x /data/plugin/ColorPro ] && /data/plugin/ColorPro >/dev/null 2>&1 &
-
-[ -x /data/plugin/ColorPro ] && /data/plugin/ColorPro >/dev/null 2>&1 &
-
-[ -x /data/plugin/ColorPro ] && /data/plugin/ColorPro >/dev/null 2>&1 &
-
-[ -x /data/plugin/ColorPro ] && /data/plugin/ColorPro >/dev/null 2>&1 &
-
-[ -x /data/plugin/ColorPro ] && /data/plugin/ColorPro >/dev/null 2>&1 &
-
-[ -x /data/plugin/ColorPro ] && /data/plugin/ColorPro >/dev/null 2>&1 &
-
-[ -x /data/plugin/ColorPro ] && /data/plugin/ColorPro >/dev/null 2>&1 &
-
-[ -x /data/plugin/ColorPro ] && /data/plugin/ColorPro >/dev/null 2>&1 &
-
-[ -x /data/plugin/ColorPro ] && /data/plugin/ColorPro >/dev/null 2>&1 &
-
-[ -x /data/plugin/ColorPro ] && /data/plugin/ColorPro >/dev/null 2>&1 &
-
-[ -x /data/plugin/ColorPro ] && /data/plugin/ColorPro >/dev/null 2>&1 &
+echo
+echo "===== Listening network ports ====="
+busybox netstat -ltnp 2>/dev/null | busybox grep -E '8890|8891|80|8080|8000'
+ 1811 0         213m S    /system/bin/f_server
+ 1972 0         2200 S    busybox httpd -p 8890 -h /data/plugin/panel/www
+ 3115 1000      772m S    {tiscreen.server} com.hisilicon.multiscreen.server
+20282 0         2200 S    busybox httpd -p 8891 -h /data/plugin/PluginManager_
 Hi3798MV200:/ #
 Hi3798MV200:/ # echo
 
-Hi3798MV200:/ # echo "===== Panel directory ====="
-===== Panel directory =====
-Hi3798MV200:/ # busybox ls -la /data/plugin/panel 2>/dev/null
-drwxr-xr-x    5 501      0             4096 Oct 14 23:50 .
-drwxrwxrwx   14 1000     1000          4096 Oct 15 00:29 ..
--rw-------    1 0        0                5 Oct  8 09:20 .guard.pid
--rwx------    1 0        0             4378 Dec 19  2037 .start.sh.bak_force
--rw-------    1 0        0               11 Oct 14 09:09 .ver_abertis-singlepress
--rw-------    1 0        0               10 Oct 14 16:53 .ver_cleanup
--rw-------    1 0        0               10 Sep 12 10:05 .ver_icam-singlepress
--rw-------    1 0        0                2 Dec 20  2037 .ver_infra-admin-iron
--rw-------    1 0        0               10 Sep 17 00:26 .ver_launcher-wegoo
--rw-------    1 0        0                4 Oct  2 09:06 .ver_orcagold
--rw-------    1 0        0                9 Oct  8 12:06 .ver_oscamsamur
--rw-------    1 0        0                6 Oct  8 09:21 .ver_panel-update
--rw-------    1 0        0               18 Oct 14 16:45 .ver_patched-launcher-wegoo
--rw-------    1 0        0               18 Oct 14 16:45 .ver_patched-launcher-wegoo-stable
--rw-------    1 0        0               10 Sep 12 10:19 .ver_picon-logos
--rw-------    1 0        0               10 Sep 12 10:21 .ver_provider-logos
--rw-------    1 0        0               10 Sep 17 13:30 .ver_sanitize
--rw-------    1 0        0                5 Apr 10  2017 .watchdog.pid
--rwxr-xr-x    1 0        0             7734 Oct  8 09:21 backup.sh
-drwxr-xr-x    2 501      0             4096 Oct  4 01:25 bin
--rw-------    1 0        0            10310 Oct 14 23:50 catalog.json
--rwxr-xr-x    1 501      0             3588 Oct  8 09:21 force_update.sh
--rw-r--r--    1 501      0              335 Oct  8 00:28 panel.conf
--rwxr-xr-x    1 0        0              622 Oct  8 09:21 panel_restore_boot.sh
--rwxr-xr-x    1 0        0             4704 Oct  8 09:21 replay.sh
--rwxr-xr-x    1 0        0             9717 Oct  8 09:21 restore.sh
--rwxr-xr-x    1 0        0             3198 Oct  8 09:21 snapshot_trigger.sh
--rwxr-xr-x    1 0        0            10078 Oct  8 12:09 start.sh
-drwxrwxrwx    2 0        0             4096 Oct 14 16:53 tmp
-drwxr-xr-x    3 501      0             4096 Oct  8 09:21 www
+Hi3798MV200:/ # echo "===== Total HTTP processes ====="
+===== Total HTTP processes =====
+s | busybox grep -Ei 'httpd|f_server' | busybox grep -v grep | busybox wc -l  <
+3
 Hi3798MV200:/ #
 Hi3798MV200:/ # echo
 
-Hi3798MV200:/ # echo "===== Panel-related startup references ====="
-===== Panel-related startup references =====
-d|icam|Abertis|Oscam|OSECM|EuroCam|Samur|/data/plugin' \                      <
->   /data/plugin/panel /data/plugin/autorun.sh 2>/dev/null
-2|Hi3798MV200:/ #
+Hi3798MV200:/ # echo "===== Plugin Manager port 8891 ====="
+===== Plugin Manager port 8891 =====
+s | busybox grep 'httpd -p 8891' | busybox grep -v grep                       <
+20282 0         2200 S    busybox httpd -p 8891 -h /data/plugin/PluginManager_
+Hi3798MV200:/ # echo "Count:"
+Count:
+s | busybox grep 'httpd -p 8891' | busybox grep -v grep | busybox wc -l       <
+1
+Hi3798MV200:/ #
+Hi3798MV200:/ # echo
+
+Hi3798MV200:/ # echo "===== Reference Panel port 8890 ====="
+===== Reference Panel port 8890 =====
+s | busybox grep 'httpd -p 8890' | busybox grep -v grep                       <
+ 1972 0         2200 S    busybox httpd -p 8890 -h /data/plugin/panel/www
+Hi3798MV200:/ # echo "Count:"
+Count:
+s | busybox grep 'httpd -p 8890' | busybox grep -v grep | busybox wc -l       <
+1
+Hi3798MV200:/ #
+Hi3798MV200:/ # echo
+
+Hi3798MV200:/ # echo "===== Listening network ports ====="
+===== Listening network ports =====
+etstat -ltnp 2>/dev/null | busybox grep -E '8890|8891|80|8080|8000'           <
+tcp        0      0 0.0.0.0:25806           0.0.0.0:*               LISTEN      3135/com.hisilicon.
+tcp        0      0 0.0.0.0:25807           0.0.0.0:*               LISTEN      3135/com.hisilicon.
+tcp        0      0 0.0.0.0:25808           0.0.0.0:*               LISTEN      3135/com.hisilicon.
+tcp        0      0 0.0.0.0:25809           0.0.0.0:*               LISTEN      3135/com.hisilicon.
+tcp        0      0 :::8890                 :::*                    LISTEN      1972/busybox
+tcp        0      0 :::8891                 :::*                    LISTEN      20282/busybox
+Hi3798MV200:/ #
+Hi3798MV200:/ # echo "===== CPU/process snapshot ====="
+===== CPU/process snapshot =====
+Hi3798MV200:/ # busybox ps
+echo
+echo "===== Possible duplicate ColorPro processes ====="
+busybox ps | busybox grep -i ColorPro | busybox grep -v grep
+
+echo
+echo "===== Possible duplicate Panel processes ====="
+busybox ps | busybox grep -Ei 'panel|f_server|httpd' | busybox grep -v grep
+
+echo
+echo "===== Autorun entries ====="
+busybox cat /data/plugin/autorun.sh 2>/dev/null
+  PID USER       VSZ STAT COMMAND
+    1 0         7168 S    /init --second-stage
+    2 0            0 SW   [kthreadd]
+    3 0            0 SW   [ksoftirqd/0]
+    5 0            0 SW<  [kworker/0:0H]
+    7 0            0 SW   [rcu_sched]
+    8 0            0 SW   [rcu_bh]
+    9 0            0 SW   [migration/0]
+   10 0            0 SW   [migration/1]
+   11 0            0 SW   [ksoftirqd/1]
+   13 0            0 SW<  [kworker/1:0H]
+   14 0            0 SW   [migration/2]
+   15 0            0 SW   [ksoftirqd/2]
+   17 0            0 SW<  [kworker/2:0H]
+   18 0            0 SW   [migration/3]
+   19 0            0 SW   [ksoftirqd/3]
+   20 0            0 SW   [kworker/3:0]
+   21 0            0 SW<  [kworker/3:0H]
+   22 0            0 SW<  [khelper]
+   23 0            0 SW<  [netns]
+   26 0            0 SW<  [perf]
+  473 0            0 SW<  [writeback]
+  476 0            0 SWN  [ksmd]
+  477 0            0 SW<  [crypto]
+  478 0            0 SW<  [bioset]
+  480 0            0 SW<  [kblockd]
+  500 0            0 SW<  [ata_sff]
+  505 0            0 SW   [spi0]
+  506 0            0 SW   [kworker/0:1]
+  532 0            0 SW   [vmalloc]
+  538 0            0 SW<  [devfreq_wq]
+  553 0            0 DW   [log_udisk_task]
+  554 0            0 DW   [dmx_monitor]
+  555 0            0 SW<  [dmx_wq]
+  556 0            0 DW   [HI_VPSS_Process]
+  557 0            0 DW   [HI_VDEC_Task]
+  558 0            0 DW   [HI_HDMI_kThread]
+  559 0            0 DW   [DispProcess]
+  560 0            0 DW   [IsogenyProcess]
+  561 0            0 DW   [HI_WIN_ReleaseF]
+  642 0            0 SW<  [rpciod]
+  666 0            0 SW   [kswapd0]
+  719 0            0 SW   [fsnotify_mark]
+  735 0            0 SW<  [nfsiod]
+  737 0            0 SW<  [cifsiod]
+  771 0            0 SW   [kapmd]
+  866 0            0 SW<  [dwc_otg]
+  871 0            0 SW<  [kpsmoused]
+  889 0            0 SW<  [dm_bufio_cache]
+  890 0            0 SW   [cfinteractive]
+  893 0            0 SW   [kworker/u8:2]
+  895 0            0 SW   [mmcqd/0]
+  896 0            0 SW   [mmcqd/0boot0]
+  897 0            0 SW   [mmcqd/0boot1]
+  898 0            0 SW   [mmcqd/0rpmb]
+ 1009 0            0 SW<  [binder]
+ 1027 0            0 DW   [usb-otg]
+ 1049 0            0 SW<  [mali_dvfs]
+ 1051 0            0 SW<  [kworker/u9:0]
+ 1075 0            0 SW<  [ipv6_addrconf]
+ 1077 0            0 SW<  [krfcommd]
+ 1083 0            0 SW<  [deferwq]
+ 1178 0            0 DW   [OmxVdecTask]
+ 1208 0            0 DW   [temperature_con]
+ 1217 0            0 SW   [kworker/1:1]
+ 1221 0         2296 S    /sbin/ueventd
+ 1616 0            0 SW   [jbd2/mmcblk0p12]
+ 1617 0            0 SW<  [ext4-rsv-conver]
+ 1621 0            0 SW<  [kworker/0:1H]
+ 1622 0            0 SW   [kworker/3:1]
+ 1626 0            0 SW   [jbd2/mmcblk0p19]
+ 1627 0            0 SW<  [ext4-rsv-conver]
+ 1628 0            0 SW   [jbd2/mmcblk0p13]
+ 1629 0            0 SW<  [ext4-rsv-conver]
+ 1630 0            0 SW   [jbd2/mmcblk0p14]
+ 1631 0            0 SW<  [ext4-rsv-conver]
+ 1632 0            0 SW   [jbd2/mmcblk0p16]
+ 1633 0            0 SW<  [ext4-rsv-conver]
+ 1634 0            0 SW   [jbd2/mmcblk0p17]
+ 1635 0            0 SW<  [ext4-rsv-conver]
+ 1636 1036     12324 S N  /system/bin/logd
+ 1646 0            0 SW   [kauditd]
+ 1649 0         5476 S    /system/bin/debuggerd
+ 1652 0        12140 S    /system/bin/vold --blkid_context=u:r:blkid:s0 --blki
+ 1659 0         5220 S    debuggerd:signaller
+ 1770 0         2992 S    /sbin/healthd
+ 1773 0         4700 S    /system/bin/lmkd
+ 1776 1000      4724 S    /system/bin/servicemanager
+ 1779 1000     60640 S <  /system/bin/surfaceflinger
+ 1780 0        17448 S    /system/bin/hiaoservice
+ 1781 0        22396 S    /system/bin/hisysmanager
+ 1782 0        13044 S    /system/bin/netshared
+ 1783 0        14748 S    /system/bin/displaysetting
+ 1784 0        27464 S    hiavplayer /hiavplayer
+ 1785 0         9924 S    /system/bin/pqsetting
+ 1788 0         984m S    {main} zygote
+ 1789 1000     11108 S    /system/bin/dlnaserver
+ 1790 0        22140 S    {Binder:1790_2} /system/bin/netd
+ 1791 1019     18624 S    /system/bin/drmserver
+ 1792 1013     48208 S    /system/bin/mediaserver
+ 1793 1041     27740 S    /system/bin/audioserver
+ 1794 1047     21520 S    /system/bin/cameraserver
+ 1795 1040     38248 S    {mediaextractor} media.extractor aextractor
+ 1796 1046     13144 S    {mediacodec} media.codec mediacodec
+ 1797 1013     25876 S    /system/bin/mediadrmserver
+ 1798 0         5096 S    /system/bin/installd
+ 1799 1017      7604 S    /system/bin/keystore /data/misc/keystore
+ 1800 1000      7364 S    /system/bin/gatekeeperd /data/misc/gatekeeper
+ 1803 0        15228 S    /system/bin/android_ir_user
+ 1811 0         213m S    /system/bin/f_server
+ 1936 0         4120 S    /system/etc/dbadmin/dropbearmulti dropbear -r /syste
+ 1971 0            0 SW   [HI_VFMW_VideoDe]
+ 1972 0         2200 S    busybox httpd -p 8890 -h /data/plugin/panel/www
+ 1974 0            0 SW   [VDH_Distributor]
+ 1975 0            0 DW   [AoEngineTask]
+ 1976 0            0 SW<  [HIFB_WorkQueque]
+ 1977 0            0 SW<  [HIFB_HWC_REFRES]
+ 2004 0            0 SW<  [kworker/3:1H]
+ 2067 0         3852 S    /system/bin/sh -c while :; do sleep 300; /system/bin
+ 2657 0            0 SW<  [kworker/2:1H]
+ 2658 0            0 SW<  [kworker/1:1H]
+ 2713 1000     1097m S    system_server
+ 2798 0         3940 S    /system/reserved/etc/url-server
+ 2918 10012     774m S    {ndroid.systemui} com.android.systemui
+ 2932 1023         0 Z    [sdcard]
+ 2945 0            0 SW   [pkgld]
+ 2959 0            0 SW   [pkgld]
+ 2963 0            0 SW   [pkgld]
+ 3075 10006     733m S    {id.ext.services} android.ext.services
+ 3115 1000      762m S    {tiscreen.server} com.hisilicon.multiscreen.server
+ 3128 10022     746m S    {ilicon.dlna.dmr} com.hisilicon.dlna.dmr
+ 3135 10023     761m S    {ilicon.dlna.dms} com.hisilicon.dlna.dms
+ 3154 1000     1076m S    {pregister.api24} tv.formuler.ipregister.api24
+ 3169 10032     749m S    {ote.tv.services} com.google.android.remote.tv.servi
+ 3235 1000      851m S    {id.dvb.launcher} com.android.dvb.launcher
+ 3347 1000      3852 S    /system/bin/sh -c while :; do sleep 300; /system/bin
+ 3398 1000      751m S    {ormuler.weather} tv.formuler.weather
+ 3402 0            0 SW   [kworker/0:2]
+ 3568 0            0 SW<  [kworker/u9:1]
+ 3575 10024     719m S    {putmethod.latin} com.hisilicon.android.inputmethod.
+ 3645 0            0 SW   [kworker/1:2]
+ 3930 1020      2516 S    /system/bin/mdnsd
+ 3951 10033    1079m S    {rg.videolan.vlc} org.videolan.vlc
+ 4014 10002     722m S    {viders.calendar} com.android.providers.calendar
+ 4623 0         3852 S    /system/bin/sh
+ 4691 0        94772 S    /data/plugin/Relay
+ 4718 0        11800 S    /data/plugin/OrcaGold
+ 4719 0        27004 S <  /data/plugin/OrcaGold
+ 6696 0            0 SW   [kworker/2:0]
+ 8267 0         3852 S    /system/bin/sh
+ 9345 0            0 SW   [kworker/u8:1]
+12369 0         2200 S    busybox telnetd -p 23 -l /system/bin/sh
+14072 0         3852 S    /system/bin/sh
+14360 0            0 SW   [kworker/u8:3]
+14907 0            0 SW   [kworker/u8:4]
+18535 0            0 SW   [kworker/2:1]
+20282 0         2200 S    busybox httpd -p 8891 -h /data/plugin/PluginManager_
+20508 0         2200 R    busybox ps
+25215 0            0 SW   [kworker/u8:0]
+27373 0            0 RW   [kworker/2:2]
+Hi3798MV200:/ #
+Hi3798MV200:/ # echo
+
+Hi3798MV200:/ # echo "===== Possible duplicate ColorPro processes ====="
+===== Possible duplicate ColorPro processes =====
+Hi3798MV200:/ # busybox ps | busybox grep -i ColorPro | busybox grep -v grep
+1|Hi3798MV200:/ #
+1|Hi3798MV200:/ # echo
+
+Hi3798MV200:/ # echo "===== Possible duplicate Panel processes ====="
+===== Possible duplicate Panel processes =====
+s | busybox grep -Ei 'panel|f_server|httpd' | busybox grep -v grep            <
+ 1811 0         213m S    /system/bin/f_server
+ 1972 0         2200 S    busybox httpd -p 8890 -h /data/plugin/panel/www
+20282 0         2200 S    busybox httpd -p 8891 -h /data/plugin/PluginManager_
+Hi3798MV200:/ #
+Hi3798MV200:/ # echo
+
+Hi3798MV200:/ # echo "===== Autorun entries ====="
+===== Autorun entries =====
+Hi3798MV200:/ # busybox cat /data/plugin/autorun.sh 2>/dev/null
+/data/plugin/start_telnet
+[ -x /data/plugin/panel/start.sh ] && /system/bin/sh /data/plugin/panel/start.sh
+/data/plugin/OrcaGold
+/data/plugin/Relay
+
+# PluginManager autostart
+/data/plugin/PluginManager >/dev/null 2>&1 &
+Hi3798MV200:/ #
