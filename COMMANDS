@@ -1,0 +1,91 @@
+
+Hi3798MV200:/ # cd /
+echo
+echo "===== Panel logs and update scripts ====="
+busybox find /data/plugin/panel -maxdepth 2 -type f \
+  \( -iname '*.log' -o -iname '*update*' -o -iname '*restore*' -o -iname '*backup*' \) \
+  -print 2>/dev/null
+Hi3798MV200:/ #
+busybox find /data/plugin -maxdepth 2 -type f -mtime -2 -print 2>/dev/null | sort
+Hi3798MV200:/ # echo "===== Plugin Manager activity ====="
+===== Plugin Manager activity =====
+at /data/plugin/PluginManager_data/activity.log 2>/dev/null                   <
+2026-10-15 02:00:38 CLEAR_CACHE
+2026-10-15 08:31:49 START MatchZap
+2026-10-15 08:59:00 STOP MatchZap
+2026-10-15 09:00:08 START MatchZap
+2026-10-15 09:45:33 DELETE_BACKUP preinstall-20261015-094031.tar.gz
+Hi3798MV200:/ #
+Hi3798MV200:/ # echo
+
+Hi3798MV200:/ # echo "===== Panel logs and update scripts ====="
+===== Panel logs and update scripts =====
+Hi3798MV200:/ # busybox find /data/plugin/panel -maxdepth 2 -type f \
+-iname '*update*' -o -iname '*restore*' -o -iname '*backup*' \) \             <
+>   -print 2>/dev/null
+/data/plugin/panel/.ver_panel-update
+/data/plugin/panel/force_update.sh
+/data/plugin/panel/panel_restore_boot.sh
+/data/plugin/panel/backup.sh
+/data/plugin/panel/restore.sh
+Hi3798MV200:/ #
+Hi3798MV200:/ # echo
+
+Hi3798MV200:/ # echo "===== Current plugin folders ====="
+===== Current plugin folders =====
+ind /data/plugin -maxdepth 1 -type d -print 2>/dev/null | sort                <
+/data/plugin
+/data/plugin/PluginManager_data
+/data/plugin/abertis
+/data/plugin/backups
+/data/plugin/etc
+/data/plugin/icam
+/data/plugin/keys
+/data/plugin/orcag
+/data/plugin/oscamemu
+/data/plugin/osecm
+/data/plugin/panel
+/data/plugin/relay
+Hi3798MV200:/ #
+Hi3798MV200:/ # echo
+
+Hi3798MV200:/ # echo "===== Recent files ====="
+===== Recent files =====
+ind /data/plugin -maxdepth 2 -type f -mtime -2 -print 2>/dev/null | sort      <
+/data/plugin/.abertis_installed
+/data/plugin/.launcher_wegoo_installed
+/data/plugin/MatchZap
+/data/plugin/MatchZap.C610
+/data/plugin/MatchZap.c63.bak
+/data/plugin/MatchZap.descr
+/data/plugin/MatchZap.prev
+/data/plugin/MatchZap.version
+/data/plugin/OrcaGold
+/data/plugin/OrcaGold.bak_preAbertis
+/data/plugin/OrcaGold.version
+/data/plugin/PluginManager
+/data/plugin/PluginManager.descr
+/data/plugin/PluginManager.version
+/data/plugin/PluginManager_data/activity.log
+/data/plugin/PluginManager_data/start.sh
+/data/plugin/abertis/OrcaGold
+/data/plugin/abertis/inject_db_abertis.sh
+/data/plugin/abertis/sqlite3
+/data/plugin/autorun.sh
+/data/plugin/autorun.sh.bak_preAbertis
+/data/plugin/autorun.sh.pm_backup
+/data/plugin/orcag/AB_DELAY
+/data/plugin/orcag/ncam.ccache
+/data/plugin/orcag/ncam.conf.bak_preAbertis
+/data/plugin/orcag/ncam.dvbapi
+/data/plugin/orcag/overlay.txt
+/data/plugin/oscamemu/oscam.ccache
+/data/plugin/panel/.start.sh.bak_force
+/data/plugin/panel/.ver_abertis-singlepress
+/data/plugin/panel/.ver_cleanup
+/data/plugin/panel/.ver_infra-admin-iron
+/data/plugin/panel/.ver_patched-launcher-wegoo
+/data/plugin/panel/.ver_patched-launcher-wegoo-stable
+/data/plugin/panel/catalog.json
+/data/plugin/relay/status
+Hi3798MV200:/ #
